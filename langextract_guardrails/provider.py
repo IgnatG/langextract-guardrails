@@ -13,11 +13,11 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING, Any
 
-from langextract_guardrails.validators import GuardrailValidator, ValidationResult
-
 import langextract as lx
 from langextract.core.base_model import BaseLanguageModel
 from langextract.core.types import ScoredOutput
+
+from langextract_guardrails.validators import GuardrailValidator, ValidationResult
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Sequence
