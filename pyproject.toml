@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 license = "Apache-2.0"
 dependencies = [
-    "langextract @ git+https://github.com/IgnatG/langextract.git@develop",
+    "langextract-core>=1.0.0",
     "jsonschema>=4.26.0",
     "json-repair>=0.58.0",
 ]

@@ -702,9 +702,9 @@ wheels = [
 ]
 
 [[package]]
-name = "langextract"
-version = "1.1.1"
-source = { git = "https://github.com/IgnatG/langextract.git?rev=develop#6084d623c80526477c3dca5aca8374cf685b1999" }
+name = "langextract-core"
+version = "1.0.0"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "absl-py" },
     { name = "aiohttp" },
@@ -726,15 +726,19 @@ dependencies = [
     { name = "tqdm" },
     { name = "typing-extensions" },
 ]
+sdist = { url = "https://files.pythonhosted.org/packages/66/e2/95e60fbafc7349b1589184fc171dd682744df3ae2cae7f85328f766e3ba0/langextract_core-1.0.0.tar.gz", hash = "sha256:b7c6822ac4a0e7e3e208e8544fefcc14b0ef901f23c9d4d04b0d2a6fe0974a57", size = 126500, upload-time = "2026-02-21T14:26:33.132Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/79/be/8814e89de08c0a9e2ff77512ee8b80fd0be6dc90b5dc74c71630f608d9aa/langextract_core-1.0.0-py3-none-any.whl", hash = "sha256:0269c6ae939bd0f35951b53155a2b9ff9ec825682dd1af2d72aeeee8b4f00d41", size = 132331, upload-time = "2026-02-21T14:26:31.607Z" },
+]
 
 [[package]]
 name = "langextract-guardrails"
-version = "1.0.1"
+version = "1.0.2"
 source = { editable = "." }
 dependencies = [
     { name = "json-repair" },
     { name = "jsonschema" },
-    { name = "langextract" },
+    { name = "langextract-core" },
 ]
 
 [package.dev-dependencies]
@@ -748,7 +752,7 @@ dev = [
 requires-dist = [
     { name = "json-repair", specifier = ">=0.58.0" },
     { name = "jsonschema", specifier = ">=4.26.0" },
-    { name = "langextract", git = "https://github.com/IgnatG/langextract.git?rev=develop" },
+    { name = "langextract-core", specifier = ">=1.0.0" },
 ]
 
 [package.metadata.requires-dev]
