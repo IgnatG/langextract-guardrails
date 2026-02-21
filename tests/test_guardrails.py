@@ -364,6 +364,116 @@ class TestGuardrailProviderAsync:
 # ---------------------------------------------------------------------------
 
 
+class TestJsonSchemaValidatorStrict:
+    """Tests for JsonSchemaValidator strict mode."""
+
+    def test_strict_rejects_additional_properties(self) -> None:
+        schema = {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+            },
+            "required": ["name"],
+        }
+        v = JsonSchemaValidator(schema=schema, strict=True)
+        result = v.validate('{"name": "Alice", "extra": "bad"}')
+        assert not result.valid
+        assert "additional" in (result.error_message or "").lower()
+
+    def test_non_strict_allows_additional_properties(self) -> None:
+        schema = {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+            },
+            "required": ["name"],
+        }
+        v = JsonSchemaValidator(schema=schema, strict=False)
+        result = v.validate('{"name": "Alice", "extra": "ok"}')
+        assert result.valid
+
+    def test_strict_recursive_nested_objects(self) -> None:
+        schema = {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "type": "object",
+                    "properties": {
+                        "value": {"type": "integer"},
+                    },
+                },
+            },
+        }
+        v = JsonSchemaValidator(schema=schema, strict=True)
+        result = v.validate('{"data": {"value": 1, "extra": 2}}')
+        assert not result.valid
+
+
+class TestCorrectionTruncation:
+    """Tests for correction prompt truncation."""
+
+    def test_truncation_applied_to_correction_prompt(self) -> None:
+        inner = _ProgrammableProvider(responses=["x" * 500, '{"ok": true}'])
+        guard = GuardrailLanguageModel(
+            model_id="guardrails/test",
+            inner=inner,
+            validators=[JsonSchemaValidator()],
+            max_retries=1,
+            max_correction_prompt_length=20,
+            max_correction_output_length=10,
+        )
+        list(guard.infer(["A" * 200]))
+        correction = inner.prompts_received[1]
+        # Original prompt should be truncated
+        assert "A" * 20 + "..." in correction
+        # Invalid output should be truncated
+        assert "x" * 10 + "..." in correction
+
+
+class TestPickBest:
+    """Tests for best-by-score selection."""
+
+    def test_picks_highest_scored_output(self) -> None:
+        """Provider should validate the highest-scored output."""
+
+        class _MultiOutputProvider(BaseLanguageModel):
+            def infer(self, batch_prompts, **kw):
+                for _p in batch_prompts:
+                    yield [
+                        ScoredOutput(score=0.3, output="low"),
+                        ScoredOutput(
+                            score=0.9,
+                            output='{"best": true}',
+                        ),
+                        ScoredOutput(score=0.5, output="mid"),
+                    ]
+
+            async def async_infer(self, batch_prompts, **kw):
+                return [
+                    [
+                        ScoredOutput(score=0.3, output="low"),
+                        ScoredOutput(
+                            score=0.9,
+                            output='{"best": true}',
+                        ),
+                    ]
+                ]
+
+        guard = GuardrailLanguageModel(
+            model_id="guardrails/test",
+            inner=_MultiOutputProvider(),
+            validators=[JsonSchemaValidator()],
+        )
+        results = list(guard.infer(["prompt"]))
+        # Should have validated the score=0.9 output
+        assert results[0][0].output == '{"best": true}'
+
+
+# ---------------------------------------------------------------------------
+# Plugin registration test
+# ---------------------------------------------------------------------------
+
+
 class TestPluginRegistration:
     """Tests for entry-point discovery."""
 

@@ -75,6 +75,9 @@ class JsonSchemaValidator(GuardrailValidator):
     ) -> None:
         self._schema = schema
         self._strict = strict
+        self._effective_schema = (
+            self._apply_strict(schema) if (schema is not None and strict) else schema
+        )
 
     @property
     def schema(self) -> dict[str, Any] | None:
@@ -85,6 +88,43 @@ class JsonSchemaValidator(GuardrailValidator):
             checked.
         """
         return self._schema
+
+    @staticmethod
+    def _apply_strict(
+        schema: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Recursively add ``additionalProperties: false`` to objects.
+
+        Creates a deep copy so the caller's original schema is
+        not mutated.
+
+        Parameters:
+            schema: The original JSON schema dict.
+
+        Returns:
+            A new schema dict with strict enforcement applied.
+        """
+        import copy
+
+        def _enforce(node: dict[str, Any]) -> dict[str, Any]:
+            if node.get("type") == "object":
+                node.setdefault("additionalProperties", False)
+            # Recurse into properties
+            for prop in node.get("properties", {}).values():
+                if isinstance(prop, dict):
+                    _enforce(prop)
+            # Recurse into items (for arrays of objects)
+            items = node.get("items")
+            if isinstance(items, dict):
+                _enforce(items)
+            # Recurse into allOf / anyOf / oneOf
+            for key in ("allOf", "anyOf", "oneOf"):
+                for sub in node.get(key, []):
+                    if isinstance(sub, dict):
+                        _enforce(sub)
+            return node
+
+        return _enforce(copy.deepcopy(schema))
 
     def validate(self, output: str) -> ValidationResult:
         """Validate output as JSON, optionally against a schema.
@@ -124,11 +164,11 @@ class JsonSchemaValidator(GuardrailValidator):
             )
 
         # Phase 2 — schema check
-        if self._schema is not None:
+        if self._effective_schema is not None:
             try:
                 jsonschema.validate(
                     instance=parsed,
-                    schema=self._schema,
+                    schema=self._effective_schema,
                 )
             except jsonschema.ValidationError as exc:
                 path = " -> ".join(str(p) for p in exc.absolute_path)

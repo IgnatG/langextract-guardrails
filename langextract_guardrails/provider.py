@@ -61,6 +61,15 @@ class GuardrailLanguageModel(BaseLanguageModel):
             Must contain ``{original_prompt}``,
             ``{invalid_output}``, and ``{error_message}``
             placeholders.
+        max_concurrency: Maximum number of prompts to process
+            concurrently in ``async_infer``.  ``None`` (default)
+            means unlimited.
+        max_correction_prompt_length: Truncate the original prompt
+            in correction prompts to this many characters.
+            ``None`` (default) means no truncation.
+        max_correction_output_length: Truncate the invalid output
+            in correction prompts to this many characters.
+            ``None`` (default) means no truncation.
         **kwargs: Additional keyword arguments forwarded to the
             base class.
     """
@@ -73,6 +82,9 @@ class GuardrailLanguageModel(BaseLanguageModel):
         validators: list[GuardrailValidator],
         max_retries: int = 3,
         correction_template: str | None = None,
+        max_concurrency: int | None = None,
+        max_correction_prompt_length: int | None = None,
+        max_correction_output_length: int | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
@@ -81,6 +93,9 @@ class GuardrailLanguageModel(BaseLanguageModel):
         self._validators = validators
         self._max_retries = max_retries
         self._correction_template = correction_template or _CORRECTION_TEMPLATE
+        self._max_concurrency = max_concurrency
+        self._max_correction_prompt_length = max_correction_prompt_length
+        self._max_correction_output_length = max_correction_output_length
 
     # -- Public accessors --
 
@@ -113,6 +128,38 @@ class GuardrailLanguageModel(BaseLanguageModel):
 
     # -- Private helpers --
 
+    @staticmethod
+    def _truncate(text: str, max_length: int | None) -> str:
+        """Truncate text to max_length if set.
+
+        Parameters:
+            text: The text to truncate.
+            max_length: Maximum chars, or ``None`` for no limit.
+
+        Returns:
+            The (possibly truncated) string.
+        """
+        if max_length is None or len(text) <= max_length:
+            return text
+        return text[:max_length] + "..."
+
+    @staticmethod
+    def _pick_best(
+        outputs: list[ScoredOutput],
+    ) -> ScoredOutput:
+        """Select the highest-scored output from a list.
+
+        Parameters:
+            outputs: Non-empty list of scored outputs.
+
+        Returns:
+            The ``ScoredOutput`` with the highest score.
+        """
+        return max(
+            outputs,
+            key=lambda o: o.score if o.score is not None else 0.0,
+        )
+
     def _validate(self, output: str) -> ValidationResult:
         """Run all validators against the output.
 
@@ -140,6 +187,10 @@ class GuardrailLanguageModel(BaseLanguageModel):
     ) -> str:
         """Build a corrective prompt for retry.
 
+        Applies truncation to the original prompt and invalid
+        output when ``max_correction_prompt_length`` /
+        ``max_correction_output_length`` are set.
+
         Parameters:
             original_prompt: The original user prompt.
             invalid_output: The invalid output from the LLM.
@@ -149,8 +200,14 @@ class GuardrailLanguageModel(BaseLanguageModel):
             A corrective prompt string.
         """
         return self._correction_template.format(
-            original_prompt=original_prompt,
-            invalid_output=invalid_output,
+            original_prompt=self._truncate(
+                original_prompt,
+                self._max_correction_prompt_length,
+            ),
+            invalid_output=self._truncate(
+                invalid_output,
+                self._max_correction_output_length,
+            ),
             error_message=error_message,
         )
 
@@ -173,23 +230,26 @@ class GuardrailLanguageModel(BaseLanguageModel):
 
         for attempt in range(1 + self._max_retries):
             # Get the result from the inner provider (single prompt)
-            results = list(self._inner.infer([current_prompt], **kwargs))
-            if not results or not results[0]:
+            inner_iter = self._inner.infer([current_prompt], **kwargs)
+            first_result = next(iter(inner_iter), None)
+            if not first_result:
                 logger.warning(
-                    "Attempt %d/%d: inner provider returned no results for prompt",
+                    "Attempt %d/%d: inner provider returned " "no results for prompt",
                     attempt + 1,
                     1 + self._max_retries,
                 )
                 continue
 
-            outputs = list(results[0])
-            best = outputs[0]
+            outputs = list(first_result)
+            best = self._pick_best(outputs)
             output_text = best.output or ""
 
             # Validate
             validation = self._validate(output_text)
             if validation.valid:
-                return outputs
+                # Return best candidate first, followed by others
+                others = [o for o in outputs if o is not best]
+                return [best, *others]
 
             # Log the failure
             logger.info(
@@ -251,12 +311,14 @@ class GuardrailLanguageModel(BaseLanguageModel):
                 continue
 
             outputs = list(results[0])
-            best = outputs[0]
+            best = self._pick_best(outputs)
             output_text = best.output or ""
 
             validation = self._validate(output_text)
             if validation.valid:
-                return outputs
+                # Return best candidate first, followed by others
+                others = [o for o in outputs if o is not best]
+                return [best, *others]
 
             logger.info(
                 "Attempt %d/%d: validation failed (async) — %s",
@@ -332,4 +394,14 @@ class GuardrailLanguageModel(BaseLanguageModel):
             self._async_infer_single_with_retries(prompt, **kwargs)
             for prompt in batch_prompts
         ]
+        if self._max_concurrency is not None:
+            sem = asyncio.Semaphore(self._max_concurrency)
+
+            async def _limited(
+                coro: Any,
+            ) -> list[ScoredOutput]:
+                async with sem:
+                    return await coro
+
+            tasks = [_limited(t) for t in tasks]
         return list(await asyncio.gather(*tasks))
