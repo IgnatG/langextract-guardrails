@@ -22,8 +22,11 @@ pip install -e .
 - **Corrective prompts** — automatically constructs retry prompts that include the original request, the invalid output, and the validation error
 - **Configurable retries** — set `max_retries` (default: 3) per provider instance
 - **Custom correction templates** — override the retry prompt template
+- **Error-only correction mode** — set `include_output_in_correction=False` to omit the invalid output from correction prompts, reducing token usage and preventing the model from fixating on bad output
+- **Correction prompt truncation** — `max_correction_prompt_length` / `max_correction_output_length` keep correction prompts bounded
 - **Markdown fence stripping** — automatically handles ` ```json ` wrapped responses
 - **Batch-independent retries** — each prompt in a batch retries independently
+- **Async concurrency control** — optional `max_concurrency` limits concurrent prompt processing
 
 ## Usage
 
@@ -121,6 +124,39 @@ guard_model = GuardrailLanguageModel(
     inner=inner_model,
     validators=[JsonSchemaValidator()],
     correction_template=template,
+)
+```
+
+### Error-Only Correction Mode
+
+When the invalid output is long or unstructured, including it in the correction
+prompt can waste tokens and cause the model to "fixate" on the bad output.  Set
+`include_output_in_correction=False` to use an error-only prompt:
+
+```python
+guard_model = GuardrailLanguageModel(
+    model_id="guardrails/gpt-4o",
+    inner=inner_model,
+    validators=[JsonSchemaValidator(schema=my_schema)],
+    include_output_in_correction=False,  # omit invalid output from retry prompt
+    max_retries=3,
+)
+```
+
+The correction prompt will still include the original prompt and the validation
+error, but will skip the `{invalid_output}` section entirely.
+
+### Correction Prompt Truncation
+
+For large prompts or outputs, truncate what goes into the correction prompt:
+
+```python
+guard_model = GuardrailLanguageModel(
+    model_id="guardrails/gpt-4o",
+    inner=inner_model,
+    validators=[JsonSchemaValidator()],
+    max_correction_prompt_length=2000,   # truncate original prompt to 2000 chars
+    max_correction_output_length=1000,   # truncate invalid output to 1000 chars
 )
 ```
 

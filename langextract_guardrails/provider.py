@@ -36,6 +36,19 @@ _CORRECTION_TEMPLATE = (
     "Return ONLY the corrected output, nothing else."
 )
 
+# Template for error-only correction mode: omits the invalid
+# output entirely to reduce token usage and avoid the model
+# "fixating" on junk output.
+_ERROR_ONLY_CORRECTION_TEMPLATE = (
+    "Your previous response was invalid.\n\n"
+    "--- Original prompt ---\n"
+    "{original_prompt}\n\n"
+    "--- Validation error ---\n"
+    "{error_message}\n\n"
+    "Please try again. "
+    "Return ONLY the corrected output, nothing else."
+)
+
 
 @lx.providers.registry.register(r"^guardrails", priority=5)
 class GuardrailLanguageModel(BaseLanguageModel):
@@ -70,6 +83,12 @@ class GuardrailLanguageModel(BaseLanguageModel):
         max_correction_output_length: Truncate the invalid output
             in correction prompts to this many characters.
             ``None`` (default) means no truncation.
+        include_output_in_correction: When ``True`` (default),
+            the invalid output is included in the correction
+            prompt.  Set to ``False`` for "error-only" mode,
+            which omits the invalid output entirely to reduce
+            token usage and avoid the model fixating on bad
+            output.
         **kwargs: Additional keyword arguments forwarded to the
             base class.
     """
@@ -85,6 +104,7 @@ class GuardrailLanguageModel(BaseLanguageModel):
         max_concurrency: int | None = None,
         max_correction_prompt_length: int | None = None,
         max_correction_output_length: int | None = None,
+        include_output_in_correction: bool = True,
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
@@ -92,7 +112,15 @@ class GuardrailLanguageModel(BaseLanguageModel):
         self._inner = inner
         self._validators = validators
         self._max_retries = max_retries
-        self._correction_template = correction_template or _CORRECTION_TEMPLATE
+        self._include_output_in_correction = include_output_in_correction
+        # Use error-only template when output is excluded, unless
+        # the caller supplied a fully custom template.
+        if correction_template is not None:
+            self._correction_template = correction_template
+        elif include_output_in_correction:
+            self._correction_template = _CORRECTION_TEMPLATE
+        else:
+            self._correction_template = _ERROR_ONLY_CORRECTION_TEMPLATE
         self._max_concurrency = max_concurrency
         self._max_correction_prompt_length = max_correction_prompt_length
         self._max_correction_output_length = max_correction_output_length
@@ -189,7 +217,9 @@ class GuardrailLanguageModel(BaseLanguageModel):
 
         Applies truncation to the original prompt and invalid
         output when ``max_correction_prompt_length`` /
-        ``max_correction_output_length`` are set.
+        ``max_correction_output_length`` are set.  When
+        ``include_output_in_correction`` is ``False``, the
+        invalid output is omitted entirely.
 
         Parameters:
             original_prompt: The original user prompt.
@@ -199,17 +229,19 @@ class GuardrailLanguageModel(BaseLanguageModel):
         Returns:
             A corrective prompt string.
         """
-        return self._correction_template.format(
-            original_prompt=self._truncate(
+        fmt_kwargs: dict[str, str] = {
+            "original_prompt": self._truncate(
                 original_prompt,
                 self._max_correction_prompt_length,
             ),
-            invalid_output=self._truncate(
+            "error_message": error_message,
+        }
+        if self._include_output_in_correction:
+            fmt_kwargs["invalid_output"] = self._truncate(
                 invalid_output,
                 self._max_correction_output_length,
-            ),
-            error_message=error_message,
-        )
+            )
+        return self._correction_template.format(**fmt_kwargs)
 
     def _infer_single_with_retries(
         self,
@@ -229,9 +261,11 @@ class GuardrailLanguageModel(BaseLanguageModel):
         current_prompt = prompt
 
         for attempt in range(1 + self._max_retries):
-            # Get the result from the inner provider (single prompt)
-            inner_iter = self._inner.infer([current_prompt], **kwargs)
-            first_result = next(iter(inner_iter), None)
+            # Get the result from the inner provider (single prompt).
+            # infer() returns an Iterator[Sequence[ScoredOutput]], so
+            # calling next() directly is sufficient — no need to wrap
+            # in iter() again.
+            first_result = next(self._inner.infer([current_prompt], **kwargs), None)
             if not first_result:
                 logger.warning(
                     "Attempt %d/%d: inner provider returned " "no results for prompt",

@@ -312,6 +312,48 @@ class TestGuardrailProviderSync:
         correction = inner.prompts_received[1]
         assert correction.startswith("CUSTOM: my prompt")
 
+    def test_include_output_in_correction_true_by_default(self) -> None:
+        """Correction prompt includes the invalid output by default."""
+        inner = _ProgrammableProvider(responses=["bad output", '{"ok": true}'])
+        guard = GuardrailLanguageModel(
+            model_id="guardrails/test",
+            inner=inner,
+            validators=[JsonSchemaValidator()],
+        )
+        list(guard.infer(["prompt"]))
+        correction = inner.prompts_received[1]
+        assert "bad output" in correction
+
+    def test_error_only_correction_omits_invalid_output(self) -> None:
+        """When include_output_in_correction=False, the invalid output
+        must not appear in the correction prompt, reducing token usage
+        and avoiding the model fixating on junk output."""
+        inner = _ProgrammableProvider(responses=["BAD OUTPUT TEXT", '{"ok": true}'])
+        guard = GuardrailLanguageModel(
+            model_id="guardrails/test",
+            inner=inner,
+            validators=[JsonSchemaValidator()],
+            include_output_in_correction=False,
+        )
+        list(guard.infer(["original prompt"]))
+        correction = inner.prompts_received[1]
+        assert "BAD OUTPUT TEXT" not in correction
+        # Original prompt and error still present.
+        assert "original prompt" in correction
+
+    def test_error_only_mode_still_corrects_successfully(self) -> None:
+        """The provider should still succeed after a retry in error-only mode."""
+        inner = _ProgrammableProvider(responses=["not json", '{"value": 42}'])
+        guard = GuardrailLanguageModel(
+            model_id="guardrails/test",
+            inner=inner,
+            validators=[JsonSchemaValidator()],
+            include_output_in_correction=False,
+        )
+        results = list(guard.infer(["prompt"]))
+        assert results[0][0].output == '{"value": 42}'
+        assert results[0][0].score == 1.0
+
 
 # ---------------------------------------------------------------------------
 # Provider tests — async
