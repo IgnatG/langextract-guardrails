@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.0.4 (2026-02-21)
+
+### Bug Fixes
+
+- Enhance JsonSchemaValidator to enforce additionalProperties for implicit objects
+  ([`631a5b6`](https://github.com/IgnatG/langextract-guardrails/commit/631a5b6a72fda28768a7bab676ef616986893333))
+
+
 ## v1.0.3 (2026-02-21)
 
 ### Bug Fixes
