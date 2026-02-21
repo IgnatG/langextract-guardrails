@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v1.0.3 (2026-02-21)
+
+### Bug Fixes
+
+- Update langextract dependency to langextract-core and adjust versioning in pyproject.toml and
+  uv.lock
+  ([`a4a00b9`](https://github.com/IgnatG/langextract-guardrails/commit/a4a00b972fca2c2003c213c614f1652f3add3956))
+
+
 ## v1.0.2 (2026-02-21)
 
 ### Bug Fixes

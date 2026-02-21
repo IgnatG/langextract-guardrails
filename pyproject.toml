@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "langextract-guardrails"
-version = "1.0.2"
+version = "1.0.3"
 description = "LangExtract guardrail provider — validates, retries, and self-corrects LLM output against schemas"
 readme = "README.md"
 requires-python = ">=3.12"
