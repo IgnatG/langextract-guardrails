@@ -1,6 +1,6 @@
 # LangExtract Guardrails Provider
 
-A provider plugin for [LangExtract](https://github.com/google/langextract) that wraps any `BaseLanguageModel` with output validation and automatic retry with corrective prompts. Subsumes retry-optimisation and verification provider concepts.
+A provider plugin for [LangExtract](https://github.com/google/langextract) that wraps any `BaseLanguageModel` with output validation, automatic retry with corrective prompts, and a rich set of pluggable validators. Inspired by [Instructor](https://github.com/jxnl/instructor) and [Guardrails AI](https://github.com/guardrails-ai/guardrails).
 
 > **Note**: This is a third-party provider plugin for LangExtract. For the main LangExtract library, visit [google/langextract](https://github.com/google/langextract).
 
@@ -14,75 +14,243 @@ cd langextract-guardrails
 pip install -e .
 ```
 
-## Features
+## Features at a Glance
 
-- **Validation + retry loop** — validates LLM output against pluggable validators, retries with corrective prompts on failure
-- **JSON Schema validation** — built-in `JsonSchemaValidator` checks syntax and schema compliance
-- **Regex validation** — built-in `RegexValidator` for pattern matching
-- **Corrective prompts** — automatically constructs retry prompts that include the original request, the invalid output, and the validation error
-- **Configurable retries** — set `max_retries` (default: 3) per provider instance
-- **Custom correction templates** — override the retry prompt template
-- **Error-only correction mode** — set `include_output_in_correction=False` to omit the invalid output from correction prompts, reducing token usage and preventing the model from fixating on bad output
-- **Correction prompt truncation** — `max_correction_prompt_length` / `max_correction_output_length` keep correction prompts bounded
-- **Markdown fence stripping** — automatically handles ` ```json ` wrapped responses
-- **Batch-independent retries** — each prompt in a batch retries independently
-- **Async concurrency control** — optional `max_concurrency` limits concurrent prompt processing
+| Feature | langextract-guardrails | Instructor | Guardrails AI |
+|---|---|---|---|
+| **Validation + retry loop** | ✅ Corrective prompts with error feedback | ✅ Automatic retry on Pydantic failure | ✅ Guard wrapping with retry |
+| **Pydantic schema validation** | ✅ `SchemaValidator` — strict or coercive | ✅ Native Pydantic response model | ⚠️ Via Pydantic integration |
+| **JSON Schema validation** | ✅ `JsonSchemaValidator` with strict mode | ❌ | ✅ JSON schema guard |
+| **Confidence threshold** | ✅ `ConfidenceThresholdValidator` — per-extraction | ❌ | ❌ |
+| **Field completeness** | ✅ `FieldCompletenessValidator` — empty/None checks | ❌ | ⚠️ Via custom validators |
+| **Consistency rules** | ✅ `ConsistencyValidator` — user-supplied rules | ❌ | ⚠️ Via custom validators |
+| **Regex validation** | ✅ `RegexValidator` | ❌ | ✅ Regex guard |
+| **On-fail actions** | ✅ `EXCEPTION` / `REASK` / `FILTER` / `NOOP` | ⚠️ Exception only | ✅ `EXCEPTION` / `REASK` / `FIX` / `NOOP` |
+| **Validator registry** | ✅ `@register_validator` decorator | ❌ | ✅ Guardrails Hub (67+ validators) |
+| **Validator chaining** | ✅ `ValidatorChain` with per-validator actions | ❌ | ✅ Guard chaining |
+| **Error-only correction mode** | ✅ Omit invalid output from retry prompt | ❌ | ❌ |
+| **Correction prompt truncation** | ✅ Bounded prompt/output length | ❌ | ❌ |
+| **Markdown fence stripping** | ✅ Via `json-repair` | ❌ | ❌ |
+| **Batch-independent retries** | ✅ Each prompt retries independently | ❌ | ❌ |
+| **Async concurrency control** | ✅ `max_concurrency` semaphore | ✅ | ❌ |
+| **LangExtract integration** | ✅ Native `BaseLanguageModel` provider | ❌ (OpenAI-focused) | ❌ (LLM-agnostic but no LangExtract) |
 
-## Usage
+## Built-in Validators
 
-### JSON Schema Validation
+### `JsonSchemaValidator`
+
+Validates that LLM output is valid JSON conforming to a JSON Schema. Automatically strips markdown fences and repairs common issues.
 
 ```python
-import langextract as lx
-from langextract_guardrails import GuardrailLanguageModel, JsonSchemaValidator
+from langextract_guardrails import JsonSchemaValidator
 
-# Create the inner provider
-inner_config = lx.factory.ModelConfig(
-    model_id="litellm/azure/gpt-4o",
-    provider="LiteLLMLanguageModel",
-)
-inner_model = lx.factory.create_model(inner_config)
-
-# Define the expected output schema
 schema = {
     "type": "object",
     "properties": {
-        "parties": {
-            "type": "array",
-            "items": {"type": "string"},
-        },
+        "parties": {"type": "array", "items": {"type": "string"}},
         "effective_date": {"type": "string"},
-        "term_years": {"type": "integer"},
     },
     "required": ["parties", "effective_date"],
 }
 
-# Wrap with guardrails
-guard_model = GuardrailLanguageModel(
-    model_id="guardrails/gpt-4o",
-    inner=inner_model,
-    validators=[JsonSchemaValidator(schema=schema)],
-    max_retries=3,
-)
+validator = JsonSchemaValidator(schema=schema, strict=True)
+```
 
-# Use as normal — invalid outputs are retried automatically
-result = lx.extract(
-    text_or_documents="Contract text...",
-    model=guard_model,
-    prompt_description="Extract parties and dates as JSON.",
+### `RegexValidator`
+
+Validates that output matches a regular expression pattern.
+
+```python
+from langextract_guardrails import RegexValidator
+
+validator = RegexValidator(
+    r'\d{4}-\d{2}-\d{2}',
+    description="date format"
 )
 ```
 
-### Regex Validation
+### `SchemaValidator`
+
+Validates extraction output against a Pydantic `BaseModel`. Supports strict mode (no type coercion) and lenient mode.
 
 ```python
-from langextract_guardrails import GuardrailLanguageModel, RegexValidator
+from pydantic import BaseModel, Field
+from langextract_guardrails import SchemaValidator, OnFailAction
+
+class Invoice(BaseModel):
+    invoice_number: str = Field(description="Invoice ID")
+    amount: float = Field(description="Total amount")
+    due_date: str = Field(description="Due date YYYY-MM-DD")
+
+validator = SchemaValidator(
+    Invoice,
+    on_fail=OnFailAction.REASK,  # re-prompt LLM on failure
+    strict=False,                 # allow type coercion
+)
+```
+
+### `ConfidenceThresholdValidator`
+
+Rejects extractions whose `confidence_score` falls below a threshold. Works with LangExtract's built-in confidence scoring.
+
+```python
+from langextract_guardrails import ConfidenceThresholdValidator, OnFailAction
+
+validator = ConfidenceThresholdValidator(
+    min_confidence=0.7,
+    score_key="confidence_score",  # default
+    on_fail=OnFailAction.FILTER,   # silently discard low-confidence
+)
+```
+
+### `FieldCompletenessValidator`
+
+Ensures all required Pydantic fields are present *and* non-empty (rejects empty strings, empty lists, and `None` values).
+
+```python
+from langextract_guardrails import FieldCompletenessValidator
+
+validator = FieldCompletenessValidator(
+    Invoice,
+    on_fail=OnFailAction.REASK,
+)
+```
+
+### `ConsistencyValidator`
+
+Cross-checks extracted values using user-supplied rules. Each rule is a callable that returns `None` on success or an error string on failure.
+
+```python
+from langextract_guardrails import ConsistencyValidator
+
+def dates_ordered(data: dict) -> str | None:
+    start = data.get("start_date", "")
+    end = data.get("end_date", "")
+    if start and end and start > end:
+        return "start_date must be before end_date"
+    return None
+
+def positive_amount(data: dict) -> str | None:
+    if data.get("amount", 0) < 0:
+        return "amount must be non-negative"
+    return None
+
+validator = ConsistencyValidator(
+    rules=[dates_ordered, positive_amount],
+    on_fail=OnFailAction.REASK,
+)
+```
+
+## On-Fail Actions
+
+The `OnFailAction` enum controls what happens when a validator fails:
+
+| Action | Behaviour |
+|---|---|
+| `EXCEPTION` | Raise a `ValidationError` immediately |
+| `REASK` | Re-prompt the LLM with the validation error |
+| `FILTER` | Silently discard the failing output |
+| `NOOP` | Log the failure but take no action |
+
+## Validator Registry
+
+Register custom validators by name for discovery and reuse:
+
+```python
+from langextract_guardrails import register_validator, get_validator, GuardrailValidator, ValidationResult
+
+@register_validator(name="max_length")
+class MaxLengthValidator(GuardrailValidator):
+    def __init__(self, max_chars: int = 5000) -> None:
+        self._max = max_chars
+
+    def validate(self, output: str) -> ValidationResult:
+        if len(output) <= self._max:
+            return ValidationResult(valid=True)
+        return ValidationResult(
+            valid=False,
+            error_message=f"Output exceeds {self._max} chars ({len(output)})",
+        )
+
+# Later, retrieve by name:
+cls = get_validator("max_length")
+validator = cls(max_chars=10000)
+```
+
+## Validator Chaining
+
+Compose multiple validators with per-validator failure actions:
+
+```python
+from langextract_guardrails import (
+    ValidatorChain,
+    ValidatorEntry,
+    SchemaValidator,
+    ConfidenceThresholdValidator,
+    FieldCompletenessValidator,
+    OnFailAction,
+)
+
+chain = ValidatorChain([
+    ValidatorEntry(SchemaValidator(Invoice), OnFailAction.REASK),
+    ValidatorEntry(FieldCompletenessValidator(Invoice), OnFailAction.REASK),
+    ValidatorEntry(
+        ConfidenceThresholdValidator(min_confidence=0.7),
+        OnFailAction.FILTER,
+    ),
+])
+
+result = chain.run(llm_output)
+if result.should_reask:
+    print("Re-prompting LLM:", result.error_messages)
+elif result.should_filter:
+    print("Filtering low-confidence extractions")
+```
+
+## Usage with GuardrailLanguageModel
+
+### Basic: Pydantic Schema Validation with Retry
+
+```python
+import langextract as lx
+from langextract_guardrails import (
+    GuardrailLanguageModel,
+    SchemaValidator,
+    ConfidenceThresholdValidator,
+    OnFailAction,
+)
+
+inner_model = lx.factory.create_model(
+    lx.factory.ModelConfig(model_id="litellm/azure/gpt-4o", provider="LiteLLMLanguageModel")
+)
 
 guard_model = GuardrailLanguageModel(
     model_id="guardrails/gpt-4o",
     inner=inner_model,
-    validators=[RegexValidator(r'"parties"\s*:', description="parties field")],
-    max_retries=2,
+    validators=[
+        SchemaValidator(Invoice, on_fail=OnFailAction.REASK),
+        ConfidenceThresholdValidator(min_confidence=0.7, on_fail=OnFailAction.FILTER),
+    ],
+    max_retries=3,
+)
+
+result = lx.extract(
+    text_or_documents="Invoice INV-2024-789 for $3,450 is due April 20th, 2024",
+    model=guard_model,
+    prompt_description="Extract invoice data as JSON.",
+)
+```
+
+### JSON Schema Validation
+
+```python
+from langextract_guardrails import GuardrailLanguageModel, JsonSchemaValidator
+
+guard_model = GuardrailLanguageModel(
+    model_id="guardrails/gpt-4o",
+    inner=inner_model,
+    validators=[JsonSchemaValidator(schema=my_json_schema)],
+    max_retries=3,
 )
 ```
 
@@ -93,18 +261,50 @@ Validators are applied in order. The first failure triggers a retry:
 ```python
 from langextract_guardrails import (
     GuardrailLanguageModel,
-    JsonSchemaValidator,
-    RegexValidator,
+    SchemaValidator,
+    FieldCompletenessValidator,
+    ConsistencyValidator,
+    ConfidenceThresholdValidator,
 )
 
 guard_model = GuardrailLanguageModel(
     model_id="guardrails/gpt-4o",
     inner=inner_model,
     validators=[
-        JsonSchemaValidator(schema=my_schema),       # Must be valid JSON matching schema
-        RegexValidator(r'\d{4}-\d{2}-\d{2}', "date format"),  # Must contain a date
+        SchemaValidator(Invoice),
+        FieldCompletenessValidator(Invoice),
+        ConsistencyValidator(rules=[dates_ordered]),
+        ConfidenceThresholdValidator(min_confidence=0.7),
     ],
     max_retries=3,
+)
+```
+
+### Error-Only Correction Mode
+
+When the invalid output is long, omit it from the correction prompt to save tokens:
+
+```python
+guard_model = GuardrailLanguageModel(
+    model_id="guardrails/gpt-4o",
+    inner=inner_model,
+    validators=[SchemaValidator(Invoice)],
+    include_output_in_correction=False,
+    max_retries=3,
+)
+```
+
+### Correction Prompt Truncation
+
+For large prompts or outputs, truncate what goes into the correction prompt:
+
+```python
+guard_model = GuardrailLanguageModel(
+    model_id="guardrails/gpt-4o",
+    inner=inner_model,
+    validators=[JsonSchemaValidator()],
+    max_correction_prompt_length=2000,
+    max_correction_output_length=1000,
 )
 ```
 
@@ -124,39 +324,6 @@ guard_model = GuardrailLanguageModel(
     inner=inner_model,
     validators=[JsonSchemaValidator()],
     correction_template=template,
-)
-```
-
-### Error-Only Correction Mode
-
-When the invalid output is long or unstructured, including it in the correction
-prompt can waste tokens and cause the model to "fixate" on the bad output.  Set
-`include_output_in_correction=False` to use an error-only prompt:
-
-```python
-guard_model = GuardrailLanguageModel(
-    model_id="guardrails/gpt-4o",
-    inner=inner_model,
-    validators=[JsonSchemaValidator(schema=my_schema)],
-    include_output_in_correction=False,  # omit invalid output from retry prompt
-    max_retries=3,
-)
-```
-
-The correction prompt will still include the original prompt and the validation
-error, but will skip the `{invalid_output}` section entirely.
-
-### Correction Prompt Truncation
-
-For large prompts or outputs, truncate what goes into the correction prompt:
-
-```python
-guard_model = GuardrailLanguageModel(
-    model_id="guardrails/gpt-4o",
-    inner=inner_model,
-    validators=[JsonSchemaValidator()],
-    max_correction_prompt_length=2000,   # truncate original prompt to 2000 chars
-    max_correction_output_length=1000,   # truncate invalid output to 1000 chars
 )
 ```
 

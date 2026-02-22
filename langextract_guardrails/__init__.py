@@ -6,18 +6,44 @@ Subsumes retry-optimisation and verification provider concepts.
 """
 
 from langextract_guardrails.provider import GuardrailLanguageModel
+from langextract_guardrails.validator_registry import (
+    ChainResult,
+    ValidationError,
+    ValidatorChain,
+    ValidatorEntry,
+    get_validator,
+    list_validators,
+    register_validator,
+)
 from langextract_guardrails.validators import (
+    ConfidenceThresholdValidator,
+    ConsistencyValidator,
+    FieldCompletenessValidator,
     GuardrailValidator,
     JsonSchemaValidator,
+    OnFailAction,
     RegexValidator,
+    SchemaValidator,
     ValidationResult,
 )
 
 __all__ = [
+    "ChainResult",
+    "ConfidenceThresholdValidator",
+    "ConsistencyValidator",
+    "FieldCompletenessValidator",
     "GuardrailLanguageModel",
     "GuardrailValidator",
     "JsonSchemaValidator",
+    "OnFailAction",
     "RegexValidator",
+    "SchemaValidator",
+    "ValidationError",
     "ValidationResult",
+    "ValidatorChain",
+    "ValidatorEntry",
+    "get_validator",
+    "list_validators",
+    "register_validator",
 ]
-__version__ = "1.0.4"
+__version__ = "1.1.0"

@@ -733,12 +733,13 @@ wheels = [
 
 [[package]]
 name = "langextract-guardrails"
-version = "1.0.2"
+version = "1.0.4"
 source = { editable = "." }
 dependencies = [
     { name = "json-repair" },
     { name = "jsonschema" },
     { name = "langextract-core" },
+    { name = "pydantic" },
 ]
 
 [package.dev-dependencies]
@@ -753,6 +754,7 @@ requires-dist = [
     { name = "json-repair", specifier = ">=0.58.0" },
     { name = "jsonschema", specifier = ">=4.26.0" },
     { name = "langextract-core", specifier = ">=1.0.0" },
+    { name = "pydantic", specifier = ">=2.12.5" },
 ]
 
 [package.metadata.requires-dev]
