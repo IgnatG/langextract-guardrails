@@ -1,12 +1,12 @@
-"""LangExtract guardrail provider plugin.
+"""LangCore guardrail provider plugin.
 
 Wraps any ``BaseLanguageModel`` with output validation and
 automatic retry with corrective prompts on validation failure.
 Subsumes retry-optimisation and verification provider concepts.
 """
 
-from langextract_guardrails.provider import GuardrailLanguageModel
-from langextract_guardrails.validator_registry import (
+from langcore_guardrails.provider import GuardrailLanguageModel
+from langcore_guardrails.validator_registry import (
     ChainResult,
     GuardrailValidationError,
     ValidationError,
@@ -16,7 +16,7 @@ from langextract_guardrails.validator_registry import (
     list_validators,
     register_validator,
 )
-from langextract_guardrails.validators import (
+from langcore_guardrails.validators import (
     ConfidenceThresholdValidator,
     ConsistencyValidator,
     FieldCompletenessValidator,

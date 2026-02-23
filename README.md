@@ -1,8 +1,8 @@
-# LangExtract Guardrails Provider
+# LangCore Guardrails Provider
 
-A provider plugin for [LangExtract](https://github.com/google/langextract) that wraps any `BaseLanguageModel` with output validation, automatic retry with corrective prompts, and a rich set of pluggable validators. Inspired by [Instructor](https://github.com/jxnl/instructor) and [Guardrails AI](https://github.com/guardrails-ai/guardrails).
+A provider plugin for [LangCore](https://github.com/google/langcore) that wraps any `BaseLanguageModel` with output validation, automatic retry with corrective prompts, and a rich set of pluggable validators. Inspired by [Instructor](https://github.com/jxnl/instructor) and [Guardrails AI](https://github.com/guardrails-ai/guardrails).
 
-> **Note**: This is a third-party provider plugin for LangExtract. For the main LangExtract library, visit [google/langextract](https://github.com/google/langextract).
+> **Note**: This is a third-party provider plugin for LangCore. For the main LangCore library, visit [google/langcore](https://github.com/google/langcore).
 
 ## Installation
 
@@ -10,13 +10,13 @@ Install from source:
 
 ```bash
 git clone <repo-url>
-cd langextract-guardrails
+cd langcore-guardrails
 pip install -e .
 ```
 
 ## Features at a Glance
 
-| Feature | langextract-guardrails | Instructor | Guardrails AI |
+| Feature | langcore-guardrails | Instructor | Guardrails AI |
 |---|---|---|---|
 | **Validation + retry loop** | ✅ Corrective prompts with error feedback | ✅ Automatic retry on Pydantic failure | ✅ Guard wrapping with retry |
 | **Pydantic schema validation** | ✅ `SchemaValidator` — strict or coercive | ✅ Native Pydantic response model | ⚠️ Via Pydantic integration |
@@ -33,7 +33,7 @@ pip install -e .
 | **Markdown fence stripping** | ✅ Via `json-repair` | ❌ | ❌ |
 | **Batch-independent retries** | ✅ Each prompt retries independently | ❌ | ❌ |
 | **Async concurrency control** | ✅ `max_concurrency` semaphore | ✅ | ❌ |
-| **LangExtract integration** | ✅ Native `BaseLanguageModel` provider | ❌ (OpenAI-focused) | ❌ (LLM-agnostic but no LangExtract) |
+| **LangCore integration** | ✅ Native `BaseLanguageModel` provider | ❌ (OpenAI-focused) | ❌ (LLM-agnostic but no LangCore) |
 
 ## Built-in Validators
 
@@ -42,7 +42,7 @@ pip install -e .
 Validates that LLM output is valid JSON conforming to a JSON Schema. Automatically strips markdown fences and repairs common issues.
 
 ```python
-from langextract_guardrails import JsonSchemaValidator
+from langcore_guardrails import JsonSchemaValidator
 
 schema = {
     "type": "object",
@@ -61,7 +61,7 @@ validator = JsonSchemaValidator(schema=schema, strict=True)
 Validates that output matches a regular expression pattern.
 
 ```python
-from langextract_guardrails import RegexValidator
+from langcore_guardrails import RegexValidator
 
 validator = RegexValidator(
     r'\d{4}-\d{2}-\d{2}',
@@ -75,7 +75,7 @@ Validates extraction output against a Pydantic `BaseModel`. Supports strict mode
 
 ```python
 from pydantic import BaseModel, Field
-from langextract_guardrails import SchemaValidator, OnFailAction
+from langcore_guardrails import SchemaValidator, OnFailAction
 
 class Invoice(BaseModel):
     invoice_number: str = Field(description="Invoice ID")
@@ -91,10 +91,10 @@ validator = SchemaValidator(
 
 ### `ConfidenceThresholdValidator`
 
-Rejects extractions whose `confidence_score` falls below a threshold. Works with LangExtract's built-in confidence scoring.
+Rejects extractions whose `confidence_score` falls below a threshold. Works with LangCore's built-in confidence scoring.
 
 ```python
-from langextract_guardrails import ConfidenceThresholdValidator, OnFailAction
+from langcore_guardrails import ConfidenceThresholdValidator, OnFailAction
 
 validator = ConfidenceThresholdValidator(
     min_confidence=0.7,
@@ -108,7 +108,7 @@ validator = ConfidenceThresholdValidator(
 Ensures all required Pydantic fields are present *and* non-empty (rejects empty strings, empty lists, and `None` values).
 
 ```python
-from langextract_guardrails import FieldCompletenessValidator
+from langcore_guardrails import FieldCompletenessValidator
 
 validator = FieldCompletenessValidator(
     Invoice,
@@ -121,7 +121,7 @@ validator = FieldCompletenessValidator(
 Cross-checks extracted values using user-supplied rules. Each rule is a callable that returns `None` on success or an error string on failure.
 
 ```python
-from langextract_guardrails import ConsistencyValidator
+from langcore_guardrails import ConsistencyValidator
 
 def dates_ordered(data: dict) -> str | None:
     start = data.get("start_date", "")
@@ -157,7 +157,7 @@ The `OnFailAction` enum controls what happens when a validator fails:
 Register custom validators by name for discovery and reuse:
 
 ```python
-from langextract_guardrails import register_validator, get_validator, GuardrailValidator, ValidationResult
+from langcore_guardrails import register_validator, get_validator, GuardrailValidator, ValidationResult
 
 @register_validator(name="max_length")
 class MaxLengthValidator(GuardrailValidator):
@@ -182,7 +182,7 @@ validator = cls(max_chars=10000)
 Compose multiple validators with per-validator failure actions:
 
 ```python
-from langextract_guardrails import (
+from langcore_guardrails import (
     ValidatorChain,
     ValidatorEntry,
     SchemaValidator,
@@ -212,8 +212,8 @@ elif result.should_filter:
 ### Basic: Pydantic Schema Validation with Retry
 
 ```python
-import langextract as lx
-from langextract_guardrails import (
+import langcore as lx
+from langcore_guardrails import (
     GuardrailLanguageModel,
     SchemaValidator,
     ConfidenceThresholdValidator,
@@ -244,7 +244,7 @@ result = lx.extract(
 ### JSON Schema Validation
 
 ```python
-from langextract_guardrails import GuardrailLanguageModel, JsonSchemaValidator
+from langcore_guardrails import GuardrailLanguageModel, JsonSchemaValidator
 
 guard_model = GuardrailLanguageModel(
     model_id="guardrails/gpt-4o",
@@ -259,7 +259,7 @@ guard_model = GuardrailLanguageModel(
 Validators are applied in order. The first failure triggers a retry:
 
 ```python
-from langextract_guardrails import (
+from langcore_guardrails import (
     GuardrailLanguageModel,
     SchemaValidator,
     FieldCompletenessValidator,
@@ -332,7 +332,7 @@ guard_model = GuardrailLanguageModel(
 Implement the `GuardrailValidator` interface:
 
 ```python
-from langextract_guardrails import GuardrailValidator, ValidationResult
+from langcore_guardrails import GuardrailValidator, ValidationResult
 
 class MaxLengthValidator(GuardrailValidator):
     def __init__(self, max_chars: int) -> None:

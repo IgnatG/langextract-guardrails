@@ -6,10 +6,10 @@ from typing import TYPE_CHECKING
 from unittest import mock
 
 import pytest
-from langextract.core.base_model import BaseLanguageModel
-from langextract.core.types import ScoredOutput
+from langcore.core.base_model import BaseLanguageModel
+from langcore.core.types import ScoredOutput
 
-from langextract_guardrails import (
+from langcore_guardrails import (
     GuardrailLanguageModel,
     GuardrailValidator,
     JsonSchemaValidator,
@@ -554,8 +554,8 @@ class TestPluginRegistration:
     """Tests for entry-point discovery."""
 
     def test_guardrails_prefix_resolves(self) -> None:
-        import langextract as lx
-        from langextract.providers import registry
+        import langcore as lx
+        from langcore.providers import registry
 
         lx.providers.load_plugins_once()
         cls = registry.resolve("guardrails/my-model")

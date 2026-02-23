@@ -3,25 +3,25 @@ requires = ["setuptools>=82.0.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "langextract-guardrails"
+name = "langcore-guardrails"
 version = "1.1.1"
-description = "LangExtract guardrail provider — validates, retries, and self-corrects LLM output against schemas"
+description = "LangCore guardrail provider — validates, retries, and self-corrects LLM output against schemas"
 readme = "README.md"
 requires-python = ">=3.12"
 license = "Apache-2.0"
 dependencies = [
-    "langextract-core>=1.1.0",
+    "langcore>=1.1.0",
     "jsonschema>=4.26.0",
     "json-repair>=0.58.0",
     "pydantic>=2.12.5",
 ]
 
-[project.entry-points."langextract.providers"]
-guardrails = "langextract_guardrails.provider:GuardrailLanguageModel"
+[project.entry-points."langcore.providers"]
+guardrails = "langcore_guardrails.provider:GuardrailLanguageModel"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["langextract_guardrails*"]
+include = ["langcore_guardrails*"]
 
 [dependency-groups]
 dev = [
@@ -35,8 +35,8 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 
 [tool.pylint.main]
-# langextract exposes `providers` dynamically; allow pylint to introspect it.
-extension-pkg-allow-list = ["langextract"]
+# langcore exposes `providers` dynamically; allow pylint to introspect it.
+extension-pkg-allow-list = ["langcore"]
 
 [tool.pylint."messages control"]
 disable = ["no-member"]
@@ -63,11 +63,11 @@ ignore = [
 ]
 
 [tool.ruff.lint.isort]
-known-first-party = ["langextract_guardrails"]
+known-first-party = ["langcore_guardrails"]
 
 [tool.semantic_release]
 version_toml = ["pyproject.toml:project.version"]
-version_variables = ["langextract_guardrails/__init__.py:__version__"]
+version_variables = ["langcore_guardrails/__init__.py:__version__"]
 branch = "main"
 build_command = "pip install build && python -m build"
 commit_message = "chore(release): v{version}"

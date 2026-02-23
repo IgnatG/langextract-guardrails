@@ -14,7 +14,7 @@ from unittest import mock
 import pytest
 from pydantic import BaseModel, Field
 
-from langextract_guardrails import (
+from langcore_guardrails import (
     ChainResult,
     ConfidenceThresholdValidator,
     ConsistencyValidator,
@@ -687,8 +687,8 @@ class TestGuardrailWithNewValidators:
 
     def test_schema_validator_retries_on_failure(self) -> None:
         """SchemaValidator should cause retries on validation failure."""
-        from langextract.core.base_model import BaseLanguageModel
-        from langextract.core.types import ScoredOutput
+        from langcore.core.base_model import BaseLanguageModel
+        from langcore.core.types import ScoredOutput
 
         class _Inner(BaseLanguageModel):
             def __init__(self):
@@ -716,7 +716,7 @@ class TestGuardrailWithNewValidators:
             async def async_infer(self, batch_prompts, **kw):
                 return []
 
-        from langextract_guardrails import GuardrailLanguageModel
+        from langcore_guardrails import GuardrailLanguageModel
 
         inner = _Inner()
         guard = GuardrailLanguageModel(
@@ -732,7 +732,7 @@ class TestGuardrailWithNewValidators:
 
     def test_confidence_threshold_filters_low_confidence(self) -> None:
         """Demo of confidence threshold + JSON schema working together."""
-        from langextract_guardrails import JsonSchemaValidator
+        from langcore_guardrails import JsonSchemaValidator
 
         v_json = JsonSchemaValidator()
         v_conf = ConfidenceThresholdValidator(min_confidence=0.8)
