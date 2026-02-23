@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.2.0 (2026-02-23)
+
+### Features
+
+- Updated the folder structure
+  ([`8b48d02`](https://github.com/IgnatG/langcore-guardrails/commit/8b48d022c8c4d833818623d40d261b24a1a8cf34))
+
+
 ## v1.1.1 (2026-02-23)
 
 ### Bug Fixes
