@@ -8,6 +8,7 @@ Subsumes retry-optimisation and verification provider concepts.
 from langextract_guardrails.provider import GuardrailLanguageModel
 from langextract_guardrails.validator_registry import (
     ChainResult,
+    GuardrailValidationError,
     ValidationError,
     ValidatorChain,
     ValidatorEntry,
@@ -33,6 +34,7 @@ __all__ = [
     "ConsistencyValidator",
     "FieldCompletenessValidator",
     "GuardrailLanguageModel",
+    "GuardrailValidationError",
     "GuardrailValidator",
     "JsonSchemaValidator",
     "OnFailAction",

@@ -38,8 +38,10 @@ if TYPE_CHECKING:
     pass
 
 __all__ = [
+    "GuardrailValidationError",
     "ValidatorChain",
     "ValidatorEntry",
+    "ValidationError",  # backward-compat alias
     "get_validator",
     "list_validators",
     "register_validator",
@@ -225,7 +227,7 @@ class ValidatorChain:
             elif entry.on_fail == OnFailAction.FILTER:
                 should_filter = True
             elif entry.on_fail == OnFailAction.EXCEPTION:
-                raise ValidationError(
+                raise GuardrailValidationError(
                     f"{entry.validator.__class__.__name__} failed: "
                     f"{result.error_message}",
                     validator=entry.validator,
@@ -289,8 +291,11 @@ class ChainResult:
         ]
 
 
-class ValidationError(Exception):
+class GuardrailValidationError(Exception):
     """Raised when a validator with ``OnFailAction.EXCEPTION`` fails.
+
+    Renamed from ``ValidationError`` to avoid shadowing
+    ``pydantic.ValidationError`` in user code.
 
     Attributes:
         validator: The failing validator instance.
@@ -307,3 +312,7 @@ class ValidationError(Exception):
         super().__init__(message)
         self.validator = validator
         self.result = result
+
+
+# Backward-compatible alias
+ValidationError = GuardrailValidationError

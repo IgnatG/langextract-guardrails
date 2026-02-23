@@ -382,9 +382,16 @@ class SchemaValidator(GuardrailValidator):
 class ConfidenceThresholdValidator(GuardrailValidator):
     """Reject extractions whose confidence falls below a threshold.
 
-    This validator inspects extraction-level data rather than raw
-    LLM output text.  It works by parsing the output as JSON and
-    checking each item for a ``confidence_score`` (or custom key).
+    In the LangExtract pipeline, confidence scores are set **after**
+    alignment — they do not appear in the raw LLM JSON output.
+    This validator therefore provides two modes of operation:
+
+    1. **Post-extraction mode** (:meth:`validate_extractions`) —
+       operates on ``Extraction`` objects that already have
+       ``confidence_score`` set.  This is the recommended mode.
+    2. **Raw JSON mode** (:meth:`validate`) — inspects parsed JSON
+       for a ``confidence_score`` key.  Useful when the LLM output
+       already contains confidence values (e.g., custom pipelines).
 
     Parameters:
         min_confidence: Minimum acceptable confidence (0.0–1.0).
@@ -429,6 +436,15 @@ class ConfidenceThresholdValidator(GuardrailValidator):
 
     def validate(self, output: str) -> ValidationResult:
         """Validate that all extractions meet the confidence threshold.
+
+        .. note::
+
+            In the standard LangExtract pipeline, confidence
+            scores are set after alignment and will **not** appear
+            in raw LLM JSON output.  If no items contain the
+            ``score_key``, this validator passes by default.
+            Use :meth:`validate_extractions` for post-alignment
+            validation.
 
         Parameters:
             output: The raw text output from the language model.
@@ -475,6 +491,33 @@ class ConfidenceThresholdValidator(GuardrailValidator):
                 ),
             )
         return ValidationResult(valid=True)
+
+    def validate_extractions(
+        self,
+        extractions: list[Any],
+    ) -> tuple[list[Any], list[Any]]:
+        """Filter extractions by confidence score (post-alignment).
+
+        This is the recommended mode for checking confidence: it
+        operates on ``Extraction`` objects whose
+        ``confidence_score`` has been set by the alignment step.
+
+        Parameters:
+            extractions: A list of ``Extraction`` objects (or any
+                object with a ``confidence_score`` attribute).
+
+        Returns:
+            A ``(passed, filtered)`` tuple of extraction lists.
+        """
+        passed: list[Any] = []
+        filtered: list[Any] = []
+        for ext in extractions:
+            score = getattr(ext, "confidence_score", None)
+            if score is not None and score < self._min_confidence:
+                filtered.append(ext)
+            else:
+                passed.append(ext)
+        return passed, filtered
 
 
 # -------------------------------------------------------------------

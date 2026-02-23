@@ -5,6 +5,14 @@ logic.  On validation failure, a corrective prompt is constructed
 that includes the original prompt, the invalid output, and the
 validation error.  The inner provider is re-invoked up to
 ``max_retries`` times.
+
+Supports per-validator ``OnFailAction`` semantics via
+``ValidatorChain``:
+
+* **REASK** — re-prompt the LLM with validation error feedback.
+* **FILTER** — silently discard the output (return score 0).
+* **EXCEPTION** — raise immediately.
+* **NOOP** — log and continue without re-prompting.
 """
 
 from __future__ import annotations
@@ -17,7 +25,11 @@ import langextract as lx
 from langextract.core.base_model import BaseLanguageModel
 from langextract.core.types import ScoredOutput
 
-from langextract_guardrails.validators import GuardrailValidator, ValidationResult
+from langextract_guardrails.validators import (
+    GuardrailValidator,
+    OnFailAction,
+    ValidationResult,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Sequence
@@ -48,6 +60,27 @@ _ERROR_ONLY_CORRECTION_TEMPLATE = (
     "Please try again. "
     "Return ONLY the corrected output, nothing else."
 )
+
+
+from dataclasses import dataclass, field as dc_field
+
+
+@dataclass(frozen=True, slots=True)
+class _ValidationOutcome:
+    """Internal result of running all validators on an output.
+
+    Aggregates per-validator ``OnFailAction`` outcomes so that the
+    retry loop can decide what to do.
+    """
+
+    all_passed: bool
+    reask_errors: list[str] = dc_field(default_factory=list)
+    should_filter: bool = False
+
+    @property
+    def combined_error_message(self) -> str:
+        """Join all reask error messages into a single string."""
+        return "\n".join(self.reask_errors)
 
 
 @lx.providers.registry.register(r"^guardrails", priority=5)
@@ -188,24 +221,73 @@ class GuardrailLanguageModel(BaseLanguageModel):
             key=lambda o: o.score if o.score is not None else 0.0,
         )
 
-    def _validate(self, output: str) -> ValidationResult:
-        """Run all validators against the output.
+    def _validate(self, output: str) -> _ValidationOutcome:
+        """Run all validators against the output, respecting ``OnFailAction``.
 
-        Returns the first failing result, or a passing result if
-        all validators pass.
+        Each validator is checked for an ``on_fail`` attribute.  If
+        absent, the default action is ``REASK`` (re-prompt).
+
+        Returns a ``_ValidationOutcome`` summarising:
+        - **reask_errors** — error messages requiring a retry.
+        - **should_filter** — output should be silently discarded.
+        - **all_passed** — every validator accepted the output.
 
         Parameters:
             output: The raw output string to validate.
 
         Returns:
-            A ``ValidationResult`` from the first failing validator,
-            or a passing result.
+            A ``_ValidationOutcome`` with per-action aggregation.
+
+        Raises:
+            GuardrailValidationError: If any validator with
+                ``OnFailAction.EXCEPTION`` fails.
         """
+        from langextract_guardrails.validator_registry import (
+            GuardrailValidationError,
+        )
+
+        reask_errors: list[str] = []
+        should_filter = False
+
         for validator in self._validators:
             result = validator.validate(output)
-            if not result.valid:
-                return result
-        return ValidationResult(valid=True)
+            if result.valid:
+                continue
+
+            action = getattr(validator, "on_fail", OnFailAction.REASK)
+            if isinstance(action, str):
+                action = OnFailAction(action)
+
+            if action == OnFailAction.EXCEPTION:
+                raise GuardrailValidationError(
+                    f"{validator.__class__.__name__} failed: "
+                    f"{result.error_message}",
+                    validator=validator,
+                    result=result,
+                )
+            elif action == OnFailAction.FILTER:
+                should_filter = True
+                logger.info(
+                    "Validator %s failed (action=FILTER): %s",
+                    validator.__class__.__name__,
+                    result.error_message,
+                )
+            elif action == OnFailAction.NOOP:
+                logger.info(
+                    "Validator %s failed (action=NOOP): %s",
+                    validator.__class__.__name__,
+                    result.error_message,
+                )
+            else:
+                # REASK (default)
+                if result.error_message:
+                    reask_errors.append(result.error_message)
+
+        return _ValidationOutcome(
+            all_passed=not reask_errors and not should_filter,
+            reask_errors=reask_errors,
+            should_filter=should_filter,
+        )
 
     def _build_correction_prompt(
         self,
@@ -250,6 +332,12 @@ class GuardrailLanguageModel(BaseLanguageModel):
     ) -> list[ScoredOutput]:
         """Run inference for a single prompt with retry logic.
 
+        Respects per-validator ``OnFailAction``:
+        - **REASK**: re-prompt with error feedback.
+        - **FILTER**: return output with ``score=0.0``.
+        - **EXCEPTION**: raised immediately by ``_validate``.
+        - **NOOP**: logged only; does not trigger retry.
+
         Parameters:
             prompt: The prompt string.
             **kwargs: Additional kwargs forwarded to the inner
@@ -259,12 +347,10 @@ class GuardrailLanguageModel(BaseLanguageModel):
             A list of ``ScoredOutput`` for this prompt.
         """
         current_prompt = prompt
+        output_text = ""
+        best = ScoredOutput(score=0.0, output="")
 
         for attempt in range(1 + self._max_retries):
-            # Get the result from the inner provider (single prompt).
-            # infer() returns an Iterator[Sequence[ScoredOutput]], so
-            # calling next() directly is sufficient — no need to wrap
-            # in iter() again.
             first_result = next(self._inner.infer([current_prompt], **kwargs), None)
             if not first_result:
                 logger.warning(
@@ -278,27 +364,33 @@ class GuardrailLanguageModel(BaseLanguageModel):
             best = self._pick_best(outputs)
             output_text = best.output or ""
 
-            # Validate
-            validation = self._validate(output_text)
-            if validation.valid:
-                # Return best candidate first, followed by others
+            # Validate (may raise for EXCEPTION action)
+            outcome = self._validate(output_text)
+            if outcome.all_passed:
                 others = [o for o in outputs if o is not best]
                 return [best, *others]
 
-            # Log the failure
+            # FILTER action — discard immediately, no retry
+            if outcome.should_filter and not outcome.reask_errors:
+                logger.info(
+                    "Attempt %d/%d: output filtered by validator",
+                    attempt + 1,
+                    1 + self._max_retries,
+                )
+                return [ScoredOutput(score=0.0, output=output_text, usage=best.usage)]
+
+            # REASK action — build corrective prompt
             logger.info(
                 "Attempt %d/%d: validation failed — %s",
                 attempt + 1,
                 1 + self._max_retries,
-                validation.error_message,
+                outcome.combined_error_message,
             )
-
-            # Build corrective prompt for next attempt
-            if attempt < self._max_retries:
+            if attempt < self._max_retries and outcome.reask_errors:
                 current_prompt = self._build_correction_prompt(
                     original_prompt=prompt,
                     invalid_output=output_text,
-                    error_message=validation.error_message or "",
+                    error_message=outcome.combined_error_message,
                 )
 
         # All retries exhausted — return last result with score 0
@@ -320,6 +412,9 @@ class GuardrailLanguageModel(BaseLanguageModel):
         **kwargs: Any,
     ) -> list[ScoredOutput]:
         """Async inference for a single prompt with retry logic.
+
+        Respects per-validator ``OnFailAction`` — see
+        :meth:`_infer_single_with_retries` for details.
 
         Parameters:
             prompt: The prompt string.
@@ -348,24 +443,33 @@ class GuardrailLanguageModel(BaseLanguageModel):
             best = self._pick_best(outputs)
             output_text = best.output or ""
 
-            validation = self._validate(output_text)
-            if validation.valid:
-                # Return best candidate first, followed by others
+            # Validate (may raise for EXCEPTION action)
+            outcome = self._validate(output_text)
+            if outcome.all_passed:
                 others = [o for o in outputs if o is not best]
                 return [best, *others]
 
+            # FILTER action — discard immediately, no retry
+            if outcome.should_filter and not outcome.reask_errors:
+                logger.info(
+                    "Attempt %d/%d: output filtered by validator (async)",
+                    attempt + 1,
+                    1 + self._max_retries,
+                )
+                return [ScoredOutput(score=0.0, output=output_text, usage=best.usage)]
+
+            # REASK action — build corrective prompt
             logger.info(
                 "Attempt %d/%d: validation failed (async) — %s",
                 attempt + 1,
                 1 + self._max_retries,
-                validation.error_message,
+                outcome.combined_error_message,
             )
-
-            if attempt < self._max_retries:
+            if attempt < self._max_retries and outcome.reask_errors:
                 current_prompt = self._build_correction_prompt(
                     original_prompt=prompt,
                     invalid_output=output_text,
-                    error_message=validation.error_message or "",
+                    error_message=outcome.combined_error_message,
                 )
 
         logger.warning(
