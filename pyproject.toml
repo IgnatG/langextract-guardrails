@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "langcore-guardrails"
-version = "1.2.0"
+version = "1.2.1"
 description = "LangCore guardrail provider — validates, retries, and self-corrects LLM output against schemas"
 readme = "README.md"
 requires-python = ">=3.12"

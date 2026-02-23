@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.2.1 (2026-02-23)
+
+### Bug Fixes
+
+- Update Python version in CI and refine langcore dependency in project files
+  ([`4ebab12`](https://github.com/IgnatG/langcore-guardrails/commit/4ebab120aa72d833da0db7d6ca8510cb27ee8068))
+
+
 ## v1.2.0 (2026-02-23)
 
 ### Features
