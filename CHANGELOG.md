@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.1.1 (2026-02-23)
+
+### Bug Fixes
+
+- Implement OnFailAction semantics for validators and enhance validation outcome handling
+  ([`b2ce56a`](https://github.com/IgnatG/langextract-guardrails/commit/b2ce56a75ade41399d6da811889da35913673e2d))
+
+
 ## v1.1.0 (2026-02-22)
 
 ### Features

@@ -48,4 +48,4 @@ __all__ = [
     "list_validators",
     "register_validator",
 ]
-__version__ = "1.1.0"
+__version__ = "1.1.1"
