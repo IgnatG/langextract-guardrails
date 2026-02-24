@@ -26,16 +26,13 @@ Example::
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from langcore_guardrails.validators import (
     GuardrailValidator,
     OnFailAction,
     ValidationResult,
 )
-
-if TYPE_CHECKING:
-    pass
 
 __all__ = [
     "GuardrailValidationError",
@@ -132,7 +129,7 @@ class ValidatorEntry:
             to ``OnFailAction.EXCEPTION``.
     """
 
-    __slots__ = ("validator", "on_fail")
+    __slots__ = ("on_fail", "validator")
 
     def __init__(
         self,
@@ -263,7 +260,7 @@ class ChainResult:
             ``OnFailAction.FILTER``.
     """
 
-    __slots__ = ("passed", "failures", "should_reask", "should_filter")
+    __slots__ = ("failures", "passed", "should_filter", "should_reask")
 
     def __init__(
         self,

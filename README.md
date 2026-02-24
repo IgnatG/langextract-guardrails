@@ -17,13 +17,14 @@
 ## Features
 
 - **Corrective retry loop** — when validation fails, constructs a corrective prompt with the original request, invalid output, and error details, then re-prompts the LLM (up to `max_retries`)
-- **6 built-in validators**:
+- **7 built-in validators**:
   - `JsonSchemaValidator` — validates output against a JSON Schema with auto-repair and markdown fence stripping
   - `RegexValidator` — matches output against regular expression patterns
   - `SchemaValidator` — validates against Pydantic `BaseModel` classes (strict or lenient mode)
   - `ConfidenceThresholdValidator` — rejects extractions below a confidence score threshold
   - `FieldCompletenessValidator` — ensures required fields are present and non-empty
   - `ConsistencyValidator` — cross-checks extracted values using custom business rules
+  - `GroundingValidator` — rejects hallucinated or poorly-grounded extractions using LangCore's alignment engine
 - **4 on-fail actions** — `EXCEPTION` (raise immediately), `REASK` (re-prompt LLM), `FILTER` (silently discard), `NOOP` (log and continue)
 - **Validator chaining** — compose multiple validators with per-validator failure actions via `ValidatorChain`
 - **Validator registry** — register custom validators by name with `@register_validator` for discovery and reuse
@@ -201,6 +202,44 @@ validator = ConsistencyValidator(
     on_fail=OnFailAction.REASK,
 )
 ```
+
+### GroundingValidator
+
+Rejects extractions that are not grounded in the source text. Works **post-alignment** — uses LangCore's alignment engine signals (`alignment_status` and `char_interval`) to detect hallucinated or weakly-grounded extractions:
+
+- **Unaligned** — no `alignment_status` (hallucinated text not found in source)
+- **Below minimum alignment quality** — e.g. only fuzzy-matched when `MATCH_LESSER` or better is required
+- **Below minimum character coverage** — the overlapping span in the source text is too short relative to the extraction
+
+```python
+from langcore_guardrails import GroundingValidator, OnFailAction
+
+validator = GroundingValidator(
+    min_alignment_quality="MATCH_FUZZY",  # Accepts all aligned, rejects unaligned
+    min_coverage=0.5,                      # At least 50% character overlap
+    on_fail=OnFailAction.FILTER,           # Silently remove hallucinated extractions
+)
+
+# Use after alignment (post-extraction)
+passed, filtered = validator.validate_extractions(
+    extractions=result.extractions,
+    source_text=result.text,
+)
+
+# Or convenience method for AnnotatedDocument
+passed, filtered = validator.validate_document(result)
+```
+
+**Alignment quality levels** (best → worst):
+
+| Level | Meaning |
+|-------|--------|
+| `MATCH_EXACT` | Extraction text found verbatim in source |
+| `MATCH_GREATER` | Source span is larger than extraction text |
+| `MATCH_LESSER` | Source span is smaller than extraction text |
+| `MATCH_FUZZY` | Approximate match only |
+
+> **Note:** `GroundingValidator` is a post-alignment validator. The `validate()` method (raw LLM output) always passes. Use `validate_extractions()` or `validate_document()` after LangCore's alignment step for meaningful grounding checks.
 
 ---
 

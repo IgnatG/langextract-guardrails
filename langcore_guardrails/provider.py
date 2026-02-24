@@ -28,7 +28,6 @@ from langcore.core.types import ScoredOutput
 from langcore_guardrails.validators import (
     GuardrailValidator,
     OnFailAction,
-    ValidationResult,
 )
 
 if TYPE_CHECKING:
@@ -62,7 +61,8 @@ _ERROR_ONLY_CORRECTION_TEMPLATE = (
 )
 
 
-from dataclasses import dataclass, field as dc_field
+from dataclasses import dataclass
+from dataclasses import field as dc_field
 
 
 @dataclass(frozen=True, slots=True)

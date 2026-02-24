@@ -22,13 +22,14 @@ New in v1.1.0
 from __future__ import annotations
 
 import abc
+import copy
 import enum
 import json
 import logging
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable
-import copy
+from typing import Any
 
 import jsonschema
 from json_repair import repair_json
@@ -37,6 +38,7 @@ __all__ = [
     "ConfidenceThresholdValidator",
     "ConsistencyValidator",
     "FieldCompletenessValidator",
+    "GroundingValidator",
     "GuardrailValidator",
     "JsonSchemaValidator",
     "OnFailAction",
@@ -349,26 +351,19 @@ class SchemaValidator(GuardrailValidator):
         errors: list[str] = []
         for i, item in enumerate(items):
             if not isinstance(item, dict):
-                errors.append(
-                    f"Item {i}: expected object, got {type(item).__name__}"
-                )
+                errors.append(f"Item {i}: expected object, got {type(item).__name__}")
                 continue
             try:
-                self._schema.model_validate(
-                    item, strict=self._strict
-                )
+                self._schema.model_validate(item, strict=self._strict)
             except PydanticValidationError as exc:
                 for err in exc.errors():
                     loc = " -> ".join(str(l) for l in err["loc"])
-                    errors.append(
-                        f"Item {i}, field '{loc}': {err['msg']}"
-                    )
+                    errors.append(f"Item {i}, field '{loc}': {err['msg']}")
 
         if errors:
             msg = (
                 f"Pydantic validation failed for "
-                f"{self._schema.__name__}:\n"
-                + "\n".join(f"  - {e}" for e in errors)
+                f"{self._schema.__name__}:\n" + "\n".join(f"  - {e}" for e in errors)
             )
             return ValidationResult(valid=False, error_message=msg)
         return ValidationResult(valid=True)
@@ -409,8 +404,7 @@ class ConfidenceThresholdValidator(GuardrailValidator):
     ) -> None:
         if not 0.0 <= min_confidence <= 1.0:
             raise ValueError(
-                f"min_confidence must be in [0.0, 1.0], "
-                f"got {min_confidence}"
+                f"min_confidence must be in [0.0, 1.0], " f"got {min_confidence}"
             )
         self._min_confidence = min_confidence
         self._score_key = score_key
@@ -471,10 +465,7 @@ class ConfidenceThresholdValidator(GuardrailValidator):
                 try:
                     score_f = float(score)
                 except (TypeError, ValueError):
-                    below.append(
-                        f"Item {i}: invalid confidence "
-                        f"'{score}'"
-                    )
+                    below.append(f"Item {i}: invalid confidence " f"'{score}'")
                     continue
                 if score_f < self._min_confidence:
                     below.append(
@@ -627,20 +618,17 @@ class FieldCompletenessValidator(GuardrailValidator):
         for i, item in enumerate(items):
             if not isinstance(item, dict):
                 errors.append(
-                    f"Item {i}: expected object, "
-                    f"got {type(item).__name__}"
+                    f"Item {i}: expected object, " f"got {type(item).__name__}"
                 )
                 continue
             for field_name in self._required_fields:
                 if field_name not in item:
                     errors.append(
-                        f"Item {i}: missing required field "
-                        f"'{field_name}'"
+                        f"Item {i}: missing required field " f"'{field_name}'"
                     )
                 elif self._is_empty(item[field_name]):
                     errors.append(
-                        f"Item {i}: required field "
-                        f"'{field_name}' is empty"
+                        f"Item {i}: required field " f"'{field_name}' is empty"
                     )
 
         if errors:
@@ -692,9 +680,7 @@ class ConsistencyValidator(GuardrailValidator):
         on_fail: OnFailAction = OnFailAction.REASK,
     ) -> None:
         if not rules:
-            raise ValueError(
-                "ConsistencyValidator requires at least one rule"
-            )
+            raise ValueError("ConsistencyValidator requires at least one rule")
         self._rules = rules
         self._on_fail = on_fail
 
@@ -745,3 +731,266 @@ class ConsistencyValidator(GuardrailValidator):
                 ),
             )
         return ValidationResult(valid=True)
+
+
+# -------------------------------------------------------------------
+# GroundingValidator — hallucination / grounding check
+# -------------------------------------------------------------------
+
+#: Ordered list of alignment qualities from best to worst.
+#: Used to compare against ``min_alignment_quality``.
+_ALIGNMENT_QUALITY_ORDER: list[str] = [
+    "MATCH_EXACT",
+    "MATCH_GREATER",
+    "MATCH_LESSER",
+    "MATCH_FUZZY",
+]
+
+
+class GroundingValidator(GuardrailValidator):
+    """Reject extractions not grounded in the source text.
+
+    After alignment, each ``Extraction`` has an ``alignment_status``
+    and a ``char_interval`` that describes where in the source text
+    the extraction was aligned.  This validator uses those signals
+    to detect hallucinated or poorly-grounded extractions:
+
+    * **Unaligned** — no ``alignment_status`` at all (hallucinated).
+    * **Below minimum alignment quality** — e.g. only fuzzy-matched
+      when ``MATCH_LESSER`` or better is required.
+    * **Below minimum character coverage** — the overlapping span
+      in the source text is too short relative to the extraction.
+
+    This is a **post-alignment** validator.  The ``validate()``
+    method (which receives raw LLM output) always passes because
+    alignment information is not available at that stage.  Use
+    :meth:`validate_extractions` after the alignment step for
+    meaningful grounding checks.
+
+    Parameters:
+        min_alignment_quality: Minimum acceptable alignment quality.
+            One of ``"MATCH_EXACT"``, ``"MATCH_GREATER"``,
+            ``"MATCH_LESSER"``, ``"MATCH_FUZZY"``.  Extractions
+            whose alignment quality is strictly worse than this
+            threshold are rejected.  Defaults to ``"MATCH_FUZZY"``
+            (accepts all aligned extractions, rejects only
+            unaligned).
+        min_coverage: Minimum character coverage ratio (0.0-1.0).
+            The ratio is computed as
+            ``aligned_span_length / extraction_text_length``.
+            Extractions below this ratio are considered poorly
+            grounded.  Defaults to ``0.5``.
+        on_fail: Default failure action for ``ValidatorChain``.
+            Defaults to ``OnFailAction.FILTER`` to silently remove
+            hallucinated extractions.
+
+    Example::
+
+        from langcore_guardrails import GroundingValidator
+
+        validator = GroundingValidator(
+            min_alignment_quality="MATCH_FUZZY",
+            min_coverage=0.5,
+        )
+        passed, filtered = validator.validate_extractions(
+            extractions=result.extractions,
+            source_text=result.text,
+        )
+    """
+
+    def __init__(
+        self,
+        *,
+        min_alignment_quality: str = "MATCH_FUZZY",
+        min_coverage: float = 0.5,
+        on_fail: OnFailAction = OnFailAction.FILTER,
+    ) -> None:
+        qual_upper = min_alignment_quality.upper()
+        if qual_upper not in _ALIGNMENT_QUALITY_ORDER:
+            allowed = ", ".join(_ALIGNMENT_QUALITY_ORDER)
+            raise ValueError(
+                f"min_alignment_quality must be one of {allowed}, "
+                f"got {min_alignment_quality!r}"
+            )
+        if not 0.0 <= min_coverage <= 1.0:
+            raise ValueError(f"min_coverage must be in [0.0, 1.0], got {min_coverage}")
+        self._min_quality = qual_upper
+        self._min_quality_index = _ALIGNMENT_QUALITY_ORDER.index(qual_upper)
+        self._min_coverage = min_coverage
+        self._on_fail = on_fail
+
+    @property
+    def min_alignment_quality(self) -> str:
+        """Return the minimum alignment quality threshold.
+
+        Returns:
+            The quality string (e.g. ``"MATCH_FUZZY"``).
+        """
+        return self._min_quality
+
+    @property
+    def min_coverage(self) -> float:
+        """Return the minimum character coverage ratio.
+
+        Returns:
+            The coverage threshold in ``[0.0, 1.0]``.
+        """
+        return self._min_coverage
+
+    @property
+    def on_fail(self) -> OnFailAction:
+        """Return the configured on-fail action.
+
+        Returns:
+            The ``OnFailAction`` value.
+        """
+        return self._on_fail
+
+    # ------------------------------------------------------------------
+    # Raw-output mode (no-op — alignment not available yet)
+    # ------------------------------------------------------------------
+
+    def validate(self, output: str) -> ValidationResult:
+        """No-op for raw LLM output.
+
+        Grounding information is only available **after** the
+        alignment step, so this method always returns a passing
+        result.  Use :meth:`validate_extractions` for meaningful
+        grounding checks.
+
+        Parameters:
+            output: The raw text output from the language model.
+
+        Returns:
+            Always ``ValidationResult(valid=True)``.
+        """
+        return ValidationResult(valid=True)
+
+    # ------------------------------------------------------------------
+    # Post-alignment mode (primary usage)
+    # ------------------------------------------------------------------
+
+    def _check_extraction(
+        self,
+        ext: Any,
+        source_text: str | None,
+    ) -> str | None:
+        """Check a single extraction for grounding.
+
+        Returns ``None`` when the extraction passes, or an error
+        string describing why it was rejected.
+        """
+        # 1. Check alignment status exists
+        status = getattr(ext, "alignment_status", None)
+        if status is None:
+            return (
+                f"'{getattr(ext, 'extraction_text', '?')}' — "
+                "unaligned (no alignment_status)"
+            )
+
+        # Normalise to string for comparison.
+        status_name: str = (
+            status.name if hasattr(status, "name") else str(status)
+        ).upper()
+
+        # Map enum *values* (e.g. "match_exact") to canonical names.
+        value_to_name = {
+            "MATCH_EXACT": "MATCH_EXACT",
+            "MATCH_GREATER": "MATCH_GREATER",
+            "MATCH_LESSER": "MATCH_LESSER",
+            "MATCH_FUZZY": "MATCH_FUZZY",
+        }
+        status_name = value_to_name.get(status_name, status_name)
+
+        # 2. Check alignment quality meets minimum
+        if status_name in _ALIGNMENT_QUALITY_ORDER:
+            quality_index = _ALIGNMENT_QUALITY_ORDER.index(status_name)
+            if quality_index > self._min_quality_index:
+                return (
+                    f"'{getattr(ext, 'extraction_text', '?')}' — "
+                    f"alignment quality {status_name} is below "
+                    f"minimum {self._min_quality}"
+                )
+        else:
+            # Unknown status — treat as unaligned.
+            return (
+                f"'{getattr(ext, 'extraction_text', '?')}' — "
+                f"unknown alignment status '{status_name}'"
+            )
+
+        # 3. Check character coverage
+        if source_text and self._min_coverage > 0.0:
+            char_interval = getattr(ext, "char_interval", None)
+            ext_text = getattr(ext, "extraction_text", "") or ""
+
+            if ext_text and char_interval is not None:
+                start = getattr(char_interval, "start_pos", None)
+                end = getattr(char_interval, "end_pos", None)
+                if start is not None and end is not None:
+                    span_length = max(0, end - start)
+                    ext_length = len(ext_text)
+                    if ext_length > 0:
+                        coverage = span_length / ext_length
+                        if coverage < self._min_coverage:
+                            return (
+                                f"'{ext_text}' — coverage "
+                                f"{coverage:.2f} < "
+                                f"min {self._min_coverage}"
+                            )
+
+        return None
+
+    def validate_extractions(
+        self,
+        extractions: list[Any],
+        source_text: str | None = None,
+    ) -> tuple[list[Any], list[Any]]:
+        """Filter extractions by grounding quality (post-alignment).
+
+        Checks each extraction's ``alignment_status`` and character
+        coverage against the configured thresholds.  Extractions
+        that fail are placed in the ``filtered`` list.
+
+        Parameters:
+            extractions: A list of ``Extraction`` objects (or any
+                object with ``alignment_status``, ``char_interval``,
+                and ``extraction_text`` attributes).
+            source_text: The original source text used for coverage
+                computation.  When ``None``, the coverage check is
+                skipped.
+
+        Returns:
+            A ``(passed, filtered)`` tuple of extraction lists.
+        """
+        passed: list[Any] = []
+        filtered: list[Any] = []
+
+        for ext in extractions:
+            error = self._check_extraction(ext, source_text)
+            if error is not None:
+                logger.debug("GroundingValidator rejected: %s", error)
+                filtered.append(ext)
+            else:
+                passed.append(ext)
+
+        return passed, filtered
+
+    def validate_document(
+        self,
+        document: Any,
+    ) -> tuple[list[Any], list[Any]]:
+        """Convenience method to validate an ``AnnotatedDocument``.
+
+        Reads ``.extractions`` and ``.text`` from the document and
+        delegates to :meth:`validate_extractions`.
+
+        Parameters:
+            document: An ``AnnotatedDocument`` (or any object with
+                ``extractions`` and ``text`` attributes).
+
+        Returns:
+            A ``(passed, filtered)`` tuple of extraction lists.
+        """
+        extractions = getattr(document, "extractions", None) or []
+        source_text = getattr(document, "text", None)
+        return self.validate_extractions(extractions, source_text=source_text)

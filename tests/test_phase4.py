@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 from typing import Any
-from unittest import mock
 
 import pytest
 from pydantic import BaseModel, Field
@@ -19,8 +18,8 @@ from langcore_guardrails import (
     ConfidenceThresholdValidator,
     ConsistencyValidator,
     FieldCompletenessValidator,
-    GuardrailValidator,
     GuardrailValidationError,
+    GuardrailValidator,
     OnFailAction,
     SchemaValidator,
     ValidationResult,
@@ -30,7 +29,6 @@ from langcore_guardrails import (
     list_validators,
     register_validator,
 )
-
 
 # ---------------------------------------------------------------------------
 # Test Pydantic models
